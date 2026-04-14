@@ -1,0 +1,54 @@
+{
+  "name": "pi-fast-mode",
+  "version": "0.1.0",
+  "description": "Persistent fast-mode toggle for pi that injects service_tier for configured provider/model pairs.",
+  "type": "module",
+  "author": "Vuri Huang",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "extension",
+    "fast-mode",
+    "service-tier",
+    "provider-payload",
+    "codex"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vurihuang/pi-fast-mode.git"
+  },
+  "homepage": "https://github.com/vurihuang/pi-fast-mode#readme",
+  "bugs": {
+    "url": "https://github.com/vurihuang/pi-fast-mode/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.ts",
+    "config.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run",
+    "release:check": "npm run check && npm run pack:check",
+    "prepublishOnly": "npm run release:check"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  }
+}
