@@ -4,6 +4,10 @@
   <img src="./showcase.png" alt="pi-fast-mode showcase" width="960" />
 </p>
 
+[![npm version](https://img.shields.io/npm/v/pi-fast-mode)](https://www.npmjs.com/package/pi-fast-mode)
+[![npm downloads](https://img.shields.io/npm/dm/pi-fast-mode)](https://www.npmjs.com/package/pi-fast-mode)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+
 `pi-fast-mode` is a pi extension/package that toggles fast mode for selected models by injecting `service_tier` into provider requests.
 
 It follows the same packaging approach as `pi-hodor`:
@@ -36,6 +40,7 @@ This is useful when you want a lightweight toggle in pi without changing your pr
 - supports custom `serviceTier` values per target
 - remembers the last on/off state when the session is resumed
 - restores the saved state when navigating branches with `/tree`
+- persists the latest on/off state across newly created sessions
 - shows status in the footer while fast mode is active
 - supports project-local, global, legacy-global, and bundled config files
 
@@ -234,15 +239,19 @@ So this works with:
 
 ## Persistence behavior
 
-Fast mode state is stored in the session as custom entries.
+Fast mode state is stored in two places:
+
+- session custom entries for branch-aware restoration
+- `~/.pi/agent/extensions/pi-fast-mode/state.json` for cross-session persistence
 
 That means:
 
 - if you turn fast mode on, quit pi, and resume the same session, it comes back on
 - if you turn it off and resume the same session, it stays off
 - if you switch branches with `/tree`, the extension restores the saved state for that branch
+- if you create a brand-new pi session later, it inherits the last persisted on/off state
 
-This persistence is session-aware and branch-aware.
+Branch-local session state still wins when it exists. The global state file is used as the fallback for newly created sessions or branches that do not yet have their own saved fast-mode entry.
 
 ## Notes and limitations
 

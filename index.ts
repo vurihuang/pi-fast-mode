@@ -26,6 +26,7 @@ const ENTRY_TYPE = "fast-mode";
 const STATUS_ID = "fast-mode";
 const BUNDLED_CONFIG_PATH = join(__dirname, "config.json");
 const GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", EXTENSION_NAME, "config.json");
+const GLOBAL_STATE_PATH = join(getAgentDir(), "extensions", EXTENSION_NAME, "state.json");
 const LEGACY_GLOBAL_CONFIG_PATH = join(getAgentDir(), "extensions", "fast-mode.json");
 const PROJECT_CONFIG_CANDIDATES = [
 	".pi-fast-mode.json",
@@ -144,6 +145,7 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 	let configuredTargets: FastTarget[] = [...DEFAULT_CONFIG.targets];
 	let resolvedConfigPath = BUNDLED_CONFIG_PATH;
 	const lastConfigError: { value?: string } = {};
+	const lastStateError: { value?: string } = {};
 
 	function activeModel(ctx?: ExtensionContext): ActiveModel {
 		return currentModel ?? ctx?.model;
@@ -153,6 +155,42 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 		return configuredTargets.length > 0
 			? configuredTargets.map((target) => `${target.provider}/${target.model}`).join(", ")
 			: "none";
+	}
+
+	function notifyStateError(ctx: ExtensionContext | undefined, action: string, error: unknown): void {
+		const message = error instanceof Error ? error.message : String(error);
+		const errorKey = `${action}:${message}`;
+		if (lastStateError.value === errorKey) return;
+		lastStateError.value = errorKey;
+		if (!ctx) return;
+		safeNotify(ctx, `[${EXTENSION_NAME}] Failed to ${action} fast-mode state at ${GLOBAL_STATE_PATH}: ${message}`, "warning");
+	}
+
+	async function readGlobalEnabledState(ctx?: ExtensionContext): Promise<boolean | undefined> {
+		try {
+			if (!(await pathExists(GLOBAL_STATE_PATH))) {
+				lastStateError.value = undefined;
+				return undefined;
+			}
+
+			const raw = JSON.parse(await readFile(GLOBAL_STATE_PATH, "utf8"));
+			const enabled = isRecord(raw) ? raw.enabled : undefined;
+			lastStateError.value = undefined;
+			return typeof enabled === "boolean" ? enabled : undefined;
+		} catch (error) {
+			notifyStateError(ctx, "read persisted", error);
+			return undefined;
+		}
+	}
+
+	async function persistGlobalEnabledState(enabled: boolean, ctx?: ExtensionContext): Promise<void> {
+		try {
+			await mkdir(dirname(GLOBAL_STATE_PATH), { recursive: true });
+			await writeFile(GLOBAL_STATE_PATH, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
+			lastStateError.value = undefined;
+		} catch (error) {
+			notifyStateError(ctx, "write persisted", error);
+		}
 	}
 
 	async function refreshConfig(cwd: string, ctx?: ExtensionContext): Promise<void> {
@@ -227,33 +265,47 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 		);
 	}
 
-	function applyEnabledState(enabled: boolean, ctx: ExtensionContext, options?: { notify?: boolean; persist?: boolean }): void {
+	async function applyEnabledState(
+		enabled: boolean,
+		ctx: ExtensionContext,
+		options?: { notify?: boolean; persist?: boolean; persistGlobal?: boolean },
+	): Promise<void> {
 		fastModeEnabled = enabled;
 		if (options?.persist !== false) persistState();
+		if (options?.persistGlobal !== false) await persistGlobalEnabledState(enabled, ctx);
 		updateStatus(ctx);
 		if (options?.notify !== false) notifyState(ctx);
 	}
 
-	function restoreEnabledState(
+	async function restoreEnabledState(
 		ctx: ExtensionContext,
 		options?: { fallback?: boolean; preserveCurrentIfMissing?: boolean },
-	): void {
+	): Promise<void> {
 		const savedState = getSavedStateFromBranch(ctx);
+		const globalState = await readGlobalEnabledState(ctx);
 		if (typeof savedState === "boolean") {
-			applyEnabledState(savedState, ctx, { notify: false, persist: false });
+			await applyEnabledState(savedState, ctx, { notify: false, persist: false, persistGlobal: false });
+			if (typeof globalState !== "boolean") {
+				await persistGlobalEnabledState(savedState, ctx);
+			}
+			return;
+		}
+
+		if (typeof globalState === "boolean") {
+			await applyEnabledState(globalState, ctx, { notify: false, persist: false, persistGlobal: false });
 			return;
 		}
 
 		if (!options?.preserveCurrentIfMissing && typeof options?.fallback === "boolean") {
-			applyEnabledState(options.fallback, ctx, { notify: false, persist: false });
+			await applyEnabledState(options.fallback, ctx, { notify: false, persist: false, persistGlobal: false });
 			return;
 		}
 
 		updateStatus(ctx);
 	}
 
-	function toggleFastMode(ctx: ExtensionContext): void {
-		applyEnabledState(!fastModeEnabled, ctx);
+	async function toggleFastMode(ctx: ExtensionContext): Promise<void> {
+		await applyEnabledState(!fastModeEnabled, ctx);
 	}
 
 	pi.registerFlag("fast", {
@@ -282,7 +334,7 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 			switch (action) {
 				case "":
 				case "toggle":
-					toggleFastMode(ctx);
+					await toggleFastMode(ctx);
 					return;
 				case "on":
 				case "enable":
@@ -290,7 +342,7 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 						notifyState(ctx);
 						return;
 					}
-					applyEnabledState(true, ctx);
+					await applyEnabledState(true, ctx);
 					return;
 				case "off":
 				case "disable":
@@ -298,7 +350,7 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 						notifyState(ctx);
 						return;
 					}
-					applyEnabledState(false, ctx);
+					await applyEnabledState(false, ctx);
 					return;
 				case "status":
 					notifyState(ctx);
@@ -321,7 +373,7 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 	pi.registerShortcut(Key.ctrlShift("f"), {
 		description: "Toggle fast mode",
 		handler: async (ctx) => {
-			toggleFastMode(ctx);
+			await toggleFastMode(ctx);
 		},
 	});
 
@@ -330,21 +382,22 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 		await refreshConfig(ctx.cwd, ctx);
 
 		if (pi.getFlag("fast") === true) {
-			applyEnabledState(true, ctx, { notify: false, persist: false });
+			await applyEnabledState(true, ctx, { notify: false, persist: false });
 			return;
 		}
 
-		restoreEnabledState(ctx, { fallback: false, preserveCurrentIfMissing: false });
+		await restoreEnabledState(ctx, { fallback: false, preserveCurrentIfMissing: false });
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
-		restoreEnabledState(ctx, { preserveCurrentIfMissing: true });
+		await restoreEnabledState(ctx, { preserveCurrentIfMissing: true });
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (getSavedStateFromBranch(ctx) !== fastModeEnabled) {
 			persistState();
 		}
+		await persistGlobalEnabledState(fastModeEnabled, ctx);
 		if (ctx.hasUI) ctx.ui.setStatus(STATUS_ID, undefined);
 	});
 
